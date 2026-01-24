@@ -5,6 +5,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import os
 import logging
+import traceback
 import math
 import numpy as np
 import multiprocessing
@@ -179,6 +180,7 @@ class SamplesCollector:
             if proc.is_alive():
                 return
             err, res = p_conn.recv()
+            p_conn.close()
             if err:
                 self.error = res
                 return
@@ -205,9 +207,9 @@ class SamplesCollector:
                 np.savez_compressed(filepath, mp=mp, fq=fq,
                                     psd=psd, px=px, py=py, pz=pz)
                 c_conn.send((False, samples_ct))
-                c_conn.close()
-            except Exception as e:
-                c_conn.send((True, e))
+            except:
+                c_conn.send((True, traceback.format_exc()))
+            finally:
                 c_conn.close()
         filename = self.names.pop(0)
         p_conn, c_conn = multiprocessing.Pipe()
@@ -217,14 +219,13 @@ class SamplesCollector:
         self.procs.append((proc, p_conn))
         if len(self.chip_helper.request_timings) > 1:
             delay = 0.1
-        now = self.reactor.monotonic()
-        return now + delay
+        return eventtime + delay
 
     def start_collector(self):
         if self.collector_timer is None:
             self.error = None
             if err := check_export_path(SAMPLES_FOLDER):
-                self.gcode.error(str(err))
+                raise self.gcode.error(str(err))
             self.chip_helper.start_measurements()
             now = self.reactor.monotonic()
             self.collector_timer = self.reactor.register_timer(
@@ -234,9 +235,7 @@ class SamplesCollector:
         if self.collector_timer is not None:
             while ((self.chip_helper.request_timings or self.procs)
                    and not self.error):
-                self._check_procs()
-                now = self.reactor.monotonic()
-                self.reactor.pause(now + 0.1)
+                self.reactor.pause(self.reactor.monotonic() + 1.0)
             self.chip_helper.finish_measurements()
             self.reactor.unregister_timer(self.collector_timer)
             self.collector_timer = None
@@ -515,30 +514,40 @@ class ChopperResonanceTuner:
             try:
                 plot = self.plt_helper.generate_html()
                 if plot is None:
+                    msg = f'Interactive plot was not generated'
+                    c_conn.send((True, msg))
                     return
                 path = self.plt_helper.save_plot(
                     plot, axis_name, self.chip_helper.chip_name)
                 msg = f'Access to interactive plot at: {path}'
                 c_conn.send((False, msg))
-                c_conn.close()
-            except Exception as e:
-                c_conn.send((True, e))
+            except:
+                c_conn.send((True, traceback.format_exc()))
+            finally:
                 c_conn.close()
         p_conn, c_conn = multiprocessing.Pipe()
         proc = multiprocessing.Process(target=run)
         proc.daemon = True
         proc.start()
+        self.gcode.respond_info('Plot generation...')
         now = last_report_time = self.reactor.monotonic()
+        lim_t = last_report_time + 120
         while proc.is_alive():
-            if now > last_report_time + 5.:
+            if now > last_report_time + 25.:
+                if now > lim_t:
+                    proc.terminate()
+                    raise self.gcode.error(f'Data processing stuck!')
                 last_report_time = now
                 self.gcode.respond_info('Plot generation...')
             now = self.reactor.pause(now + .1)
+        if not p_conn.poll():
+            raise self.gcode.error('Plot generation crashed '
+                                   'before reporting result')
         err, res = p_conn.recv()
-        if err:
-            self.gcode.error(f'Plot generation finished '
-                             f'with error: {err}')
         p_conn.close()
+        if err:
+            raise self.gcode.error(f'Plot generation finished '
+                                   f'with error: {res}')
         self.gcode.respond_info(res)
 
     def enable_extra_steppers(self, mode):
@@ -580,7 +589,7 @@ class ChopperResonanceTuner:
         axis_name = 'x'
         # axis_name = gcmd.get('AXIS', self.axes[0]).lower()
         axis = resonance_tester._parse_axis(gcmd, axis_name)
-        _steppers = gcmd.get('STEPPER',).split(',')
+        _steppers = gcmd.get('STEPPER',).replace(',', ' ').split()
         if not _steppers[0]:
             _steppers = list(self.kin_steppers.keys())
         self.steppers = {str(name): st for name, st in
