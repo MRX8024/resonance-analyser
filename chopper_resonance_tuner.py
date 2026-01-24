@@ -132,7 +132,7 @@ class AccelHelper:
         if self.samples_trim_size:
             trim = int(data.shape[0] // self.samples_trim_size)
             data = data[trim:-trim]
-        cal_data = self.sh_helper.process_accelerometer_data(data)
+        cal_data = self.sh_helper.process_accelerometer_data("", data)
         cal_data.normalize_to_frequencies()
         freqs = cal_data.freq_bins
         psd = cal_data.psd_sum[freqs <= self.max_freq]
