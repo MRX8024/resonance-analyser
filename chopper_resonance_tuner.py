@@ -289,8 +289,7 @@ class ResonanceTest:
         last_v = last_t = last_accel = last_freq = 0.
         for next_t, accel, freq in self.test_seq:
             t_seg = next_t - last_t
-            self.toolhead.cmd_M204(self.gcode.create_gcode_command(
-                "M204", "M204", {"S": abs(accel)}))
+            self.toolhead.set_max_velocities(None, abs(accel), None, None)
             v = last_v + accel * t_seg
             abs_v = abs(v)
             if abs_v < 0.000001:
@@ -300,14 +299,14 @@ class ResonanceTest:
             last_v2 = last_v * last_v
             half_inv_accel = .5 / accel
             d = (v2 - last_v2) * half_inv_accel
-            dX, dY = self.axis.get_point(d)
+            dX, dY, dZ = self.axis.get_point(d)
             nX = X + dX
             nY = Y + dY
             self.toolhead.limit_next_junction_speed(abs_last_v)
             if v * last_v < 0:
                 # The move first goes to a complete stop, then changes direction
                 d_decel = -last_v2 * half_inv_accel
-                decel_X, decel_Y = self.axis.get_point(d_decel)
+                decel_X, decel_Y, decel_Z = self.axis.get_point(d_decel)
                 self.toolhead.move(
                     [X + decel_X, Y + decel_Y, Z, E], abs_last_v)
                 self.toolhead.move([nX, nY, Z, E], abs_v)
@@ -323,10 +322,9 @@ class ResonanceTest:
             last_freq = freq
         if last_v:
             d_decel = -.5 * last_v2 / old_max_accel
-            decel_X, decel_Y = self.axis.get_point(d_decel)
+            decel_X, decel_Y, decel_Z = self.axis.get_point(d_decel)
             self.toolhead.move([X + decel_X, Y + decel_Y, Z, E], abs(last_v))
-            self.toolhead.cmd_M204(self.gcode.create_gcode_command(
-                "M204", "M204", {"S": old_max_accel}))
+            self.toolhead.set_max_velocities(None, old_max_accel, None, None)
 
     def run_to_init_position(self):
         self.toolhead.move(self.old_pos, speed=self.travel_speed)
